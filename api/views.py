@@ -4,6 +4,8 @@ from rest_framework import status
 from rest_framework import viewsets
 from rest_framework.pagination import PageNumberPagination
 
+from .pagination import RelativeUrlPagination
+
 
 from .serealizers import JournalEntrySerializer
 from .models import JournalEntry
@@ -15,3 +17,4 @@ class HelloWorldViewSet(viewsets.ViewSet):
 class JournalEntryViewSet(viewsets.ModelViewSet):
     queryset = JournalEntry.objects.all()
     serializer_class = JournalEntrySerializer
+    pagination_class = RelativeUrlPagination
