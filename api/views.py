@@ -3,6 +3,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework import viewsets
 from rest_framework.pagination import PageNumberPagination
+from rest_framework.filters import OrderingFilter
 
 from .pagination import RelativeUrlPagination
 
@@ -18,3 +19,7 @@ class JournalEntryViewSet(viewsets.ModelViewSet):
     queryset = JournalEntry.objects.all()
     serializer_class = JournalEntrySerializer
     pagination_class = RelativeUrlPagination
+
+    filter_backends = [OrderingFilter]
+    ordering_fields = ['created_at', 'updated_at']
+    ordering = ['-created_at']
