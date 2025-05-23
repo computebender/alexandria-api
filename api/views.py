@@ -2,6 +2,7 @@ import datetime
 import json
 import time
 import asyncio
+import uuid
 
 from django.http import StreamingHttpResponse
 
@@ -53,30 +54,60 @@ async def streaming_test(request, task_id):
         channel_layer = get_channel_layer()
         task_group_name = f'task_{task_id}'
 
-        channel_name = f'sse_{task_id}_{int(time.time() * 1000)}'
+        channel_name = f'sse_{task_id}_{uuid.uuid4()}_{request.META.get("REMOTE_ADDR", "")}_{request.META.get("REMOTE_PORT", "")}'
         
         await channel_layer.group_add(task_group_name, channel_name)
 
         try:
-            # Send initial connection message
-            yield f"data: {json.dumps({'type': 'connected', 'task_id': task_id})}\n\n"
-
+            initial_message = {'type': 'connected', 'task_id': task_id}
+            try:
+                yield f"data: {json.dumps(initial_message)}\n\n"
+            except Exception as e_yield_initial:
+                # If initial send fails, client might already be gone.
+                # No point in continuing. Finally block will handle cleanup.
+                return
+           
             while True:
                 try:
                     # Check for messages with a timeout
-                    message = await channel_layer.receive(channel_name)
+                    message = await asyncio.wait_for(
+                        channel_layer.receive(channel_name),
+                        timeout=10.0
+                    )
                     
                     if message:
-                        # Forward the message to the client
-                        yield f"data: {json.dumps(message)}\n\n"
-                        
-                        # If task is complete or errored, break the loop
+                        try:
+                            yield f"data: {json.dumps(message)}\n\n"
+                        except Exception as e_yield_message:
+                            # Client likely disconnected
+                            # Exit the loop to allow cleanup
+                            break 
+
                         if message.get('type') in ['task_complete', 'task_error']:
                             break
-                except:
-                    # If no message received, send a heartbeat
-                    yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
-                    await asyncio.sleep(1)
+                
+                except asyncio.TimeoutError:
+                    # No message received within the timeout, send a heartbeat
+                    try:
+                        yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                    except Exception as e_yield_heartbeat:
+                        # Client likely disconnected
+                        # Exit the loop to allow cleanup
+                        break 
+                
+                except asyncio.CancelledError:
+                    # The task was cancelled. Re-raise to ensure proper cleanup by the ASGI server.
+                    raise 
+
+                except Exception as e:
+                    # Handle other unexpected errors
+                    error_payload = {'type': 'stream_error', 'detail': str(e)}
+                    try:
+                        yield f"data: {json.dumps(error_payload)}\n\n"
+                    except Exception:
+                        # Failed to send error to client, likely disconnected
+                        pass
+                    break # Exit loop on other errors
         
         finally:
             # Clean up: remove from group
@@ -88,5 +119,4 @@ async def streaming_test(request, task_id):
             content_type='text/event-stream'
         )
     response['Cache-Control'] = 'no-cache'
-    response['Connection'] = 'keep-alive'
     return response
